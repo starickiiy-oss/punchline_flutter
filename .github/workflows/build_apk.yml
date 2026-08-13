@@ -1,3 +1,4 @@
+
 name: Build APK
 
 on:
@@ -11,28 +12,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Find Flutter project
-        run: |
-          PROJECT_DIR=$(find . -name "pubspec.yaml" -not -path "*/.*" | head -1 | xargs dirname)
-          echo "PROJECT_DIR=$PROJECT_DIR" >> $GITHUB_ENV
-          echo "Found project at: $PROJECT_DIR"
-
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.24.0'
           channel: 'stable'
 
-      - name: Get dependencies
-        run: flutter pub get
-        working-directory: ${{ env.PROJECT_DIR }}
-
       - name: Build APK
-        run: flutter build apk --release
-        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          PROJECT_DIR=$(find "$GITHUB_WORKSPACE" -maxdepth 2 -name "pubspec.yaml" -not -path "*/\.*" | head -1 | xargs dirname)
+          echo "Found project at: $PROJECT_DIR"
+          cd "$PROJECT_DIR"
+          flutter pub get
+          flutter build apk --release
+          cp build/app/outputs/flutter-apk/app-release.apk "$GITHUB_WORKSPACE/app-release.apk"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: punchline-apk
-          path: ${{ env.PROJECT_DIR }}/build/app/outputs/flutter-apk/app-release.apk
+          path: app-release.apk
