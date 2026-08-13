@@ -18,15 +18,14 @@ jobs:
 
       - name: Create project and build
         run: |
-          flutter create temp_project --platforms android
-          cp -r lib/* temp_project/lib/
-          cp pubspec.yaml temp_project/
-          cd temp_project
-          flutter pub get
+          flutter create build_project --platforms android --project-name punchline
+          cp lib/main.dart build_project/lib/main.dart
+          cd build_project
+          flutter pub add shared_preferences
           flutter build apk --release
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: punchline-apk
-          path: temp_project/build/app/outputs/flutter-apk/app-release.apk
+          path: build_project/build/app/outputs/flutter-apk/app-release.apk
