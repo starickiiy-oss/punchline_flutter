@@ -17,27 +17,15 @@ jobs:
           flutter-version: '3.24.0'
           channel: 'stable'
 
-      - name: Find project and build
+      - name: Build APK
         run: |
-          echo "=== Repository structure ==="
           ls -la
-          find . -name "pubspec.yaml" -maxdepth 3
-          
-          PROJECT_DIR=$(find . -maxdepth 3 -name "pubspec.yaml" | head -1 | xargs dirname)
-          echo "=== Project dir: $PROJECT_DIR ==="
-          ls -la "$PROJECT_DIR"
-          
-          cd "$PROJECT_DIR"
-          pwd
+          cd punchline_flutter
           flutter pub get
           flutter build apk --release
-          
-          echo "=== Build outputs ==="
-          ls -la build/app/outputs/flutter-apk/
-          cp build/app/outputs/flutter-apk/app-release.apk ../app-release.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: punchline-apk
-          path: app-release.apk
+          path: punchline_flutter/build/app/outputs/flutter-apk/app-release.apk
