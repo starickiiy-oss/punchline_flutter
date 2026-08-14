@@ -1,46 +1,430 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-void main() => runApp(const PunchlineApp());
+// ═══════════════════════════════════════════════════════════════
+//  КОНСТАНТЫ И ПАЛИТРА
+// ═══════════════════════════════════════════════════════════════
+const kPrimary    = Color(0xFF6C63FF);
+const kSecondary  = Color(0xFF00BFA6);
+const kAccent     = Color(0xFFFF6584);
+const kBackground = Color(0xFF0A0A0F);
+const kSurface    = Color(0xFF14141B);
+const kSurfaceLight = Color(0xFF1E1E2C);
+const kError      = Color(0xFFCF6679);
+const kGold       = Color(0xFFFFD700);
 
-class PunchlineApp extends StatelessWidget {
-  const PunchlineApp({super.key});
+final Map<String, Color> kStatusColors = {
+  'raw':   const Color(0xFF8E8E93),
+  'wip':   const Color(0xFFFF9F0A),
+  'ready': kSecondary,
+  'stage': kPrimary,
+  'dead':  kError,
+};
+
+final Map<String, String> kStatusLabels = {
+  'raw':   'Сырая',
+  'wip':   'В работе',
+  'ready': 'Готова',
+  'stage': 'На сцене',
+  'dead':  'Убита',
+};
+
+final Map<String, IconData> kTypeIcons = {
+  'observation': Icons.remove_red_eye_outlined,
+  'story':       Icons.menu_book_outlined,
+  'oneline':     Icons.short_text,
+  'crowd':       Icons.people_outline,
+  'sketch':      Icons.theater_comedy_outlined,
+};
+
+final Map<String, String> kTypeLabels = {
+  'observation': 'Образ',
+  'story':       'История',
+  'oneline':     'One-liner',
+  'crowd':       'Крауд',
+  'sketch':      'Скетч',
+};
+
+final List<Color> kTagPalette = [
+  kPrimary, kSecondary, kAccent, kGold,
+  Colors.cyan, Colors.purpleAccent, Colors.lightGreen,
+];
+
+Color tagColor(String tag) => kTagPalette[tag.hashCode.abs() % kTagPalette.length];
+
+// ═══════════════════════════════════════════════════════════════
+//  МОДЕЛИ
+// ═══════════════════════════════════════════════════════════════
+class Joke {
+  String id;
+  String setup;
+  String punchline;
+  String type;
+  List<String> tags;
+  String status;
+  int rating;
+  DateTime createdAt;
+  DateTime? updatedAt;
+  int timesPerformed;
+  int totalLaughs;
+  String? notes;
+
+  Joke({
+    required this.id,
+    required this.setup,
+    required this.punchline,
+    this.type = 'observation',
+    this.tags = const [],
+    this.status = 'raw',
+    this.rating = 0,
+    required this.createdAt,
+    this.updatedAt,
+    this.timesPerformed = 0,
+    this.totalLaughs = 0,
+    this.notes,
+  });
+
+  factory Joke.fromJson(Map<String, dynamic> json) => Joke(
+    id: json['id'],
+    setup: json['setup'],
+    punchline: json['punchline'],
+    type: json['type'] ?? 'observation',
+    tags: List<String>.from(json['tags'] ?? []),
+    status: json['status'] ?? 'raw',
+    rating: json['rating'] ?? 0,
+    createdAt: DateTime.parse(json['createdAt']),
+    updatedAt: json['updatedAt'] != null ? DateTime.parse(json['updatedAt']) : null,
+    timesPerformed: json['timesPerformed'] ?? 0,
+    totalLaughs: json['totalLaughs'] ?? 0,
+    notes: json['notes'],
+  );
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'setup': setup,
+    'punchline': punchline,
+    'type': type,
+    'tags': tags,
+    'status': status,
+    'rating': rating,
+    'createdAt': createdAt.toIso8601String(),
+    'updatedAt': updatedAt?.toIso8601String(),
+    'timesPerformed': timesPerformed,
+    'totalLaughs': totalLaughs,
+    'notes': notes,
+  };
+
+  Joke copyWith({
+    String? setup, String? punchline, String? type,
+    List<String>? tags, String? status, int? rating,
+    DateTime? updatedAt, int? timesPerformed, int? totalLaughs, String? notes,
+  }) => Joke(
+    id: id,
+    setup: setup ?? this.setup,
+    punchline: punchline ?? this.punchline,
+    type: type ?? this.type,
+    tags: tags ?? this.tags,
+    status: status ?? this.status,
+    rating: rating ?? this.rating,
+    createdAt: createdAt,
+    updatedAt: updatedAt ?? this.updatedAt,
+    timesPerformed: timesPerformed ?? this.timesPerformed,
+    totalLaughs: totalLaughs ?? this.totalLaughs,
+    notes: notes ?? this.notes,
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  ХРАНИЛИЩЕ
+// ═══════════════════════════════════════════════════════════════
+class JokeStorage {
+  static const _jokesKey = 'jokes_v3';
+  static const _setlistKey = 'setlist_v3';
+
+  static Future<List<Joke>> loadJokes() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_jokesKey);
+    if (raw == null) return [];
+    try {
+      final list = jsonDecode(raw) as List;
+      return list.map((e) => Joke.fromJson(e)).toList();
+    } catch (_) { return []; }
+  }
+
+  static Future<void> saveJokes(List<Joke> jokes) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_jokesKey, jsonEncode(jokes.map((e) => e.toJson()).toList()));
+  }
+
+  static Future<List<String>> loadSetlist() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getStringList(_setlistKey) ?? [];
+  }
+
+  static Future<void> saveSetlist(List<String> ids) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(_setlistKey, ids);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  ВСПОМОГАТЕЛЬНЫЕ ВИДЖЕТЫ
+// ═══════════════════════════════════════════════════════════════
+class GlassCard extends StatelessWidget {
+  final Widget child;
+  final EdgeInsets? padding;
+  final double? radius;
+  const GlassCard({super.key, required this.child, this.padding, this.radius});
+
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Панчлайн',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(useMaterial3: true, colorSchemeSeed: Colors.black),
-      home: const HomeScreen(),
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      decoration: BoxDecoration(
+        color: kSurface.withOpacity(0.85),
+        borderRadius: BorderRadius.circular(radius ?? 20),
+        border: Border.all(color: Colors.white.withOpacity(0.06)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.4),
+            blurRadius: 20,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(radius ?? 20),
+        child: child,
+      ),
     );
   }
 }
 
-class Joke {
-  int id;
-  String title, setup, punchline, type, status, tags, time, notes;
-  int inSetlist, setlistOrder;
-  Joke({this.id = 0, required this.title, required this.setup, required this.punchline, this.type = 'observation', this.status = 'raw', this.tags = '', this.time = '1:00', this.notes = '', this.inSetlist = 0, this.setlistOrder = 0});
-  Map<String, dynamic> toJson() => {'id': id, 'title': title, 'setup': setup, 'punchline': punchline, 'type': type, 'status': status, 'tags': tags, 'time': time, 'notes': notes, 'inSetlist': inSetlist, 'setlistOrder': setlistOrder};
-  factory Joke.fromJson(Map<String, dynamic> j) => Joke(id: j['id'], title: j['title'], setup: j['setup'], punchline: j['punchline'], type: j['type'], status: j['status'], tags: j['tags'], time: j['time'], notes: j['notes'], inSetlist: j['inSetlist'] ?? 0, setlistOrder: j['setlistOrder'] ?? 0);
+class StatusBadge extends StatelessWidget {
+  final String status;
+  const StatusBadge({super.key, required this.status});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = kStatusColors[status] ?? Colors.grey;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.15),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: color.withOpacity(0.3)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(width: 6, height: 6, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
+          const SizedBox(width: 6),
+          Text(kStatusLabels[status] ?? status, style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w600)),
+        ],
+      ),
+    );
+  }
 }
 
-class Storage {
-  static const _key = 'jokes';
-  static Future<List<Joke>> load() async {
-    final p = await SharedPreferences.getInstance();
-    final s = p.getString(_key);
-    if (s == null) return [];
-    final list = jsonDecode(s) as List;
-    return list.map((j) => Joke.fromJson(j)).toList();
-  }
-  static Future<void> save(List<Joke> jokes) async {
-    final p = await SharedPreferences.getInstance();
-    await p.setString(_key, jsonEncode(jokes.map((j) => j.toJson()).toList()));
+class TagChip extends StatelessWidget {
+  final String tag;
+  const TagChip({super.key, required this.tag});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = tagColor(tag);
+    return Container(
+      margin: const EdgeInsets.only(right: 6, bottom: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.12),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withOpacity(0.25)),
+      ),
+      child: Text('#$tag', style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w500)),
+    );
   }
 }
 
+class ShimmerBox extends StatefulWidget {
+  final double width, height;
+  final double radius;
+  const ShimmerBox({super.key, required this.width, required this.height, this.radius = 12});
+
+  @override
+  State<ShimmerBox> createState() => _ShimmerBoxState();
+}
+
+class _ShimmerBoxState extends State<ShimmerBox> with SingleTickerProviderStateMixin {
+  late AnimationController _ctrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 1500))..repeat();
+  }
+
+  @override
+  void dispose() { _ctrl.dispose(); super.dispose(); }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _ctrl,
+      builder: (_, __) => Container(
+        width: widget.width, height: widget.height,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(widget.radius),
+          gradient: LinearGradient(
+            colors: [kSurfaceLight, kSurface.withOpacity(0.5), kSurfaceLight],
+            stops: [0, _ctrl.value, 1],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class AnimatedFAB extends StatefulWidget {
+  final VoidCallback onPressed;
+  final bool extended;
+  const AnimatedFAB({super.key, required this.onPressed, this.extended = false});
+
+  @override
+  State<AnimatedFAB> createState() => _AnimatedFABState();
+}
+
+class _AnimatedFABState extends State<AnimatedFAB> with SingleTickerProviderStateMixin {
+  late AnimationController _ctrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 300));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTapDown: (_) => _ctrl.forward(),
+      onTapUp: (_) { _ctrl.reverse(); widget.onPressed(); },
+      onTapCancel: () => _ctrl.reverse(),
+      child: ScaleTransition(
+        scale: Tween(begin: 1.0, end: 0.9).animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOut)),
+        child: Container(
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(colors: [kPrimary, Color(0xFF8B5CF6)]),
+            borderRadius: BorderRadius.circular(28),
+            boxShadow: [
+              BoxShadow(color: kPrimary.withOpacity(0.4), blurRadius: 20, spreadRadius: 2),
+            ],
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.add, color: Colors.white),
+              if (widget.extended) ...[
+                const SizedBox(width: 8),
+                const Text('Шутка', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  CONFETTI OVERLAY
+// ═══════════════════════════════════════════════════════════════
+class ConfettiOverlay extends StatefulWidget {
+  final VoidCallback? onComplete;
+  const ConfettiOverlay({super.key, this.onComplete});
+
+  @override
+  State<ConfettiOverlay> createState() => _ConfettiOverlayState();
+}
+
+class _Particle {
+  double x, y, vx, vy, size, opacity;
+  Color color;
+  _Particle(this.x, this.y, this.vx, this.vy, this.size, this.color, this.opacity);
+}
+
+class _ConfettiOverlayState extends State<ConfettiOverlay> with SingleTickerProviderStateMixin {
+  late AnimationController _ctrl;
+  final List<_Particle> _particles = [];
+  final Random _rnd = Random();
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(vsync: this, duration: const Duration(seconds: 3));
+    for (int i = 0; i < 60; i++) {
+      _particles.add(_Particle(
+        0.5 + (_rnd.nextDouble() - 0.5) * 0.2,
+        0.4 + _rnd.nextDouble() * 0.2,
+        (_rnd.nextDouble() - 0.5) * 6,
+        -_rnd.nextDouble() * 10 - 3,
+        _rnd.nextDouble() * 5 + 2,
+        [kPrimary, kSecondary, kAccent, kGold, Colors.cyan, Colors.purpleAccent][_rnd.nextInt(6)],
+        1.0,
+      ));
+    }
+    _timer = Timer.periodic(const Duration(milliseconds: 16), (_) {
+      if (!mounted) return;
+      setState(() {
+        for (final p in _particles) {
+          p.x += p.vx * 0.016;
+          p.y += p.vy * 0.016;
+          p.vy += 0.25;
+          p.opacity -= 0.008;
+        }
+        _particles.removeWhere((p) => p.opacity <= 0);
+        if (_particles.isEmpty) _ctrl.stop();
+      });
+    });
+    _ctrl.forward().then((_) => widget.onComplete?.call());
+  }
+
+  @override
+  void dispose() { _timer?.cancel(); _ctrl.dispose(); super.dispose(); }
+
+  @override
+  Widget build(BuildContext context) {
+    return CustomPaint(
+      size: Size.infinite,
+      painter: _ConfettiPainter(_particles),
+    );
+  }
+}
+
+class _ConfettiPainter extends CustomPainter {
+  final List<_Particle> particles;
+  _ConfettiPainter(this.particles);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    for (final p in particles) {
+      final paint = Paint()..color = p.color.withOpacity(p.opacity.clamp(0, 1));
+      canvas.drawCircle(Offset(p.x * size.width, p.y * size.height), p.size, paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  ГЛАВНЫЙ ЭКРАН (BottomNav)
+// ═══════════════════════════════════════════════════════════════
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
   @override
@@ -48,98 +432,676 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  int idx = 0;
-  final screens = [const JokesScreen(), const SetlistScreen(), const StatsScreen()];
+  int _index = 0;
+  final _pages = const [JokesScreen(), SetlistScreen(), StatsScreen(), PerformanceScreen()];
+
   @override
   Widget build(BuildContext context) {
-    return Scaffold(body: screens[idx], bottomNavigationBar: NavigationBar(selectedIndex: idx, onDestinationSelected: (i) => setState(() => idx = i), destinations: const [NavigationDestination(icon: Icon(Icons.list), label: 'Шутки'), NavigationDestination(icon: Icon(Icons.playlist_play), label: 'Сет-лист'), NavigationDestination(icon: Icon(Icons.bar_chart), label: 'Статистика')]), floatingActionButton: idx == 0 ? FloatingActionButton(onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AddEditScreen())).then((_) => setState(() {})), child: const Icon(Icons.add)) : null);
+    return Scaffold(
+      backgroundColor: kBackground,
+      body: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 400),
+        transitionBuilder: (child, anim) => FadeTransition(
+          opacity: anim,
+          child: SlideTransition(
+            position: Tween<Offset>(begin: const Offset(0.05, 0), end: Offset.zero).animate(anim),
+            child: child,
+          ),
+        ),
+        child: KeyedSubtree(key: ValueKey<int>(_index), child: _pages[_index]),
+      ),
+      bottomNavigationBar: Container(
+        decoration: BoxDecoration(
+          color: kSurface.withOpacity(0.95),
+          border: const Border(top: BorderSide(color: Color(0xFF2A2A3A))),
+          boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.5), blurRadius: 20)],
+        ),
+        child: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceAround,
+              children: [
+                _navItem(Icons.format_quote_outlined, 'Шутки', 0),
+                _navItem(Icons.playlist_play_outlined, 'Сет', 1),
+                _navItem(Icons.bar_chart_outlined, 'Стат', 2),
+                _navItem(Icons.mic_outlined, 'Сцена', 3),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _navItem(IconData icon, String label, int idx) {
+    final active = _index == idx;
+    return GestureDetector(
+      onTap: () => setState(() => _index = idx),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeOutCubic,
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        decoration: BoxDecoration(
+          color: active ? kPrimary.withOpacity(0.15) : Colors.transparent,
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, color: active ? kPrimary : Colors.white38, size: 24),
+            const SizedBox(height: 2),
+            Text(label, style: TextStyle(color: active ? kPrimary : Colors.white38, fontSize: 10, fontWeight: FontWeight.w600)),
+          ],
+        ),
+      ),
+    );
   }
 }
 
+// ═══════════════════════════════════════════════════════════════
+//  ЭКРАН ШУТОК
+// ═══════════════════════════════════════════════════════════════
 class JokesScreen extends StatefulWidget {
   const JokesScreen({super.key});
   @override
   State<JokesScreen> createState() => _JokesScreenState();
 }
 
-class _JokesScreenState extends State<JokesScreen> {
-  List<Joke> jokes = [];
-  String search = '';
-  String? statusFilter;
-  String? typeFilter;
-  final stMap = {'raw': 'Сырая', 'wip': 'Проработка', 'ready': 'Рабочая', 'stage': 'В сете', 'dead': 'Списана'};
-  final tpMap = {'observation': 'Наблюдение', 'story': 'История', 'oneline': 'Одностишье', 'crowd': 'Взаимодействие', 'sketch': 'Скетч'};
+class _JokesScreenState extends State<JokesScreen> with TickerProviderStateMixin {
+  List<Joke> _jokes = [];
+  List<Joke> _filtered = [];
+  bool _loading = true;
+  String _search = '';
+  String? _filterStatus;
+  String? _filterType;
+  bool _searchOpen = false;
+  final _searchCtrl = TextEditingController();
+  final _scrollCtrl = ScrollController();
+
   @override
-  void initState() { super.initState(); _load(); }
-  Future<void> _load() async { final all = await Storage.load(); setState(() { jokes = all.where((j) {
-    final q = search.toLowerCase();
-    final matchSearch = search.isEmpty || j.title.toLowerCase().contains(q) || j.setup.toLowerCase().contains(q) || j.punchline.toLowerCase().contains(q) || j.tags.toLowerCase().contains(q);
-    final matchStatus = statusFilter == null || j.status == statusFilter;
-    final matchType = typeFilter == null || j.type == typeFilter;
-    return matchSearch && matchStatus && matchType;
-  }).toList(); }); }
-  Future<void> _delete(Joke j) async { final all = await Storage.load(); all.removeWhere((x) => x.id == j.id); await Storage.save(all); _load(); }
-  Future<void> _addSet(Joke j) async { final all = await Storage.load(); if (!all.any((x) => x.id == j.id && x.inSetlist == 1)) { final idx = all.indexWhere((x) => x.id == j.id); if (idx != -1) { all[idx].inSetlist = 1; all[idx].setlistOrder = all.where((x) => x.inSetlist == 1).length - 1; await Storage.save(all); } } }
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    _jokes = await JokeStorage.loadJokes();
+    _applyFilter();
+    setState(() => _loading = false);
+  }
+
+  void _applyFilter() {
+    _filtered = _jokes.where((j) {
+      final matchSearch = _search.isEmpty ||
+        j.setup.toLowerCase().contains(_search.toLowerCase()) ||
+        j.punchline.toLowerCase().contains(_search.toLowerCase()) ||
+        j.tags.any((t) => t.toLowerCase().contains(_search.toLowerCase()));
+      final matchStatus = _filterStatus == null || j.status == _filterStatus;
+      final matchType = _filterType == null || j.type == _filterType;
+      return matchSearch && matchStatus && matchType;
+    }).toList();
+  }
+
+  Future<void> _delete(Joke joke) async {
+    _jokes.removeWhere((j) => j.id == joke.id);
+    await JokeStorage.saveJokes(_jokes);
+    _applyFilter();
+    setState(() {});
+    _showSnack('Шутка удалена', action: 'Отменить', onAction: () async {
+      _jokes.add(joke);
+      await JokeStorage.saveJokes(_jokes);
+      _applyFilter();
+      setState(() {});
+    });
+  }
+
+  void _showSnack(String msg, {String? action, VoidCallback? onAction}) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(msg, style: const TextStyle(color: Colors.white)),
+        backgroundColor: kSurfaceLight,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        margin: const EdgeInsets.all(16),
+        action: action != null ? SnackBarAction(label: action, textColor: kPrimary, onPressed: onAction!) : null,
+      ),
+    );
+  }
+
+  void _showConfetti() {
+    final overlay = OverlayEntry(builder: (_) => const ConfettiOverlay());
+    Overlay.of(context).insert(overlay);
+    Future.delayed(const Duration(seconds: 3), overlay.remove);
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Column(children: [
-      Padding(padding: const EdgeInsets.all(12), child: Column(children: [
-        SearchBar(hintText: 'Поиск...', onChanged: (v) { search = v; _load(); }),
-        const SizedBox(height: 8),
-        Row(children: [
-          Expanded(child: DropdownButtonFormField<String>(value: statusFilter, hint: const Text('Статус'), items: [null, ...stMap.keys].map((k) => DropdownMenuItem(value: k, child: Text(k == null ? 'Все' : stMap[k]!))).toList(), onChanged: (v) { setState(() => statusFilter = v); _load(); })),
-          const SizedBox(width: 8),
-          Expanded(child: DropdownButtonFormField<String>(value: typeFilter, hint: const Text('Тип'), items: [null, ...tpMap.keys].map((k) => DropdownMenuItem(value: k, child: Text(k == null ? 'Все' : tpMap[k]!))).toList(), onChanged: (v) { setState(() => typeFilter = v); _load(); })),
-        ]),
-      ])),
-      Expanded(child: jokes.isEmpty ? const Center(child: Text('Ничего не найдено')) : ListView.builder(padding: const EdgeInsets.symmetric(horizontal: 12), itemCount: jokes.length, itemBuilder: (c, i) {
-        final j = jokes[i]; final tags = j.tags.split(',').map((t) => t.trim()).where((t) => t.isNotEmpty).toList();
-        return Card(margin: const EdgeInsets.only(bottom: 12), child: Padding(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Row(children: [Expanded(child: Text(j.title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w500))), IconButton(icon: const Icon(Icons.playlist_add), onPressed: () => _addSet(j)), IconButton(icon: const Icon(Icons.edit), onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => AddEditScreen(joke: j))).then((_) => _load())), IconButton(icon: const Icon(Icons.delete_outline), onPressed: () => _delete(j))]),
-          const SizedBox(height: 6), Text(j.setup, style: TextStyle(fontSize: 14, color: Colors.grey[700]), maxLines: 2, overflow: TextOverflow.ellipsis),
-          const SizedBox(height: 4), Text(j.punchline, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w500)),
-          const SizedBox(height: 10), Wrap(spacing: 6, children: [...tags.map((t) => Chip(label: Text(t), visualDensity: VisualDensity.compact)), Chip(label: Text(stMap[j.status] ?? j.status)), Chip(label: Text(j.time))]),
-        ])));
-      })),
-    ]);
+    return Scaffold(
+      backgroundColor: kBackground,
+      floatingActionButton: AnimatedFAB(
+        extended: _scrollCtrl.hasClients ? _scrollCtrl.offset < 50 : true,
+        onPressed: () => _showAddSheet(),
+      ),
+      body: RefreshIndicator(
+        onRefresh: _load,
+        color: kPrimary,
+        backgroundColor: kSurface,
+        child: CustomScrollView(
+          controller: _scrollCtrl,
+          physics: const BouncingScrollPhysics(),
+          slivers: [
+            SliverAppBar(
+              expandedHeight: 140,
+              floating: false,
+              pinned: true,
+              elevation: 0,
+              backgroundColor: Colors.transparent,
+              flexibleSpace: FlexibleSpaceBar(
+                background: Container(
+                  decoration: const BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [Color(0xFF1A1A2E), Color(0xFF0A0A0F)],
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                    ),
+                  ),
+                  child: SafeArea(
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.all(8),
+                                decoration: BoxDecoration(
+                                  gradient: const LinearGradient(colors: [kPrimary, Color(0xFF8B5CF6)]),
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: const Icon(Icons.format_quote, color: Colors.white, size: 20),
+                              ),
+                              const SizedBox(width: 12),
+                              const Text('Панчлайн', style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800, color: Colors.white, letterSpacing: -0.5)),
+                              const Spacer(),
+                              IconButton(
+                                icon: const Icon(Icons.settings_outlined, color: Colors.white54),
+                                onPressed: () => Navigator.push(context, _fadeRoute(const SettingsScreen())),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          Text('${_jokes.length} шуток в твоей коллекции', style: TextStyle(color: Colors.white.withOpacity(0.4), fontSize: 13)),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: Column(
+                  children: [
+                    AnimatedContainer(
+                      duration: const Duration(milliseconds: 300),
+                      height: _searchOpen ? 56 : 0,
+                      child: _searchOpen ? TextField(
+                        controller: _searchCtrl,
+                        autofocus: true,
+                        style: const TextStyle(color: Colors.white),
+                        decoration: InputDecoration(
+                          hintText: 'Поиск по шуткам, тегам...',
+                          hintStyle: TextStyle(color: Colors.white.withOpacity(0.3)),
+                          prefixIcon: const Icon(Icons.search, color: Colors.white38),
+                          suffixIcon: IconButton(
+                            icon: const Icon(Icons.clear, color: Colors.white38),
+                            onPressed: () { _searchCtrl.clear(); _search = ''; _applyFilter(); setState(() {}); },
+                          ),
+                          filled: true,
+                          fillColor: kSurfaceLight,
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide.none),
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                        ),
+                        onChanged: (v) { _search = v; _applyFilter(); setState(() {}); },
+                      ) : null,
+                    ),
+                    if (!_searchOpen)
+                      Row(
+                        children: [
+                          Expanded(
+                            child: GestureDetector(
+                              onTap: () => setState(() => _searchOpen = true),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                                decoration: BoxDecoration(color: kSurfaceLight, borderRadius: BorderRadius.circular(16)),
+                                child: Row(
+                                  children: [
+                                    const Icon(Icons.search, color: Colors.white38, size: 20),
+                                    const SizedBox(width: 10),
+                                    Text('Поиск...', style: TextStyle(color: Colors.white.withOpacity(0.3))),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          _filterChip('Все', _filterStatus == null && _filterType == null, () => setState(() { _filterStatus = null; _filterType = null; _applyFilter(); })),
+                        ],
+                      ),
+                    const SizedBox(height: 12),
+                    SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      physics: const BouncingScrollPhysics(),
+                      child: Row(
+                        children: [
+                          ...kStatusColors.entries.map((e) => Padding(
+                            padding: const EdgeInsets.only(right: 8),
+                            child: _filterChip(e.value, _filterStatus == e.key, () => setState(() { _filterStatus = _filterStatus == e.key ? null : e.key; _applyFilter(); }), label: kStatusLabels[e.key]),
+                          )),
+                          ...kTypeIcons.entries.map((e) => Padding(
+                            padding: const EdgeInsets.only(right: 8),
+                            child: _filterChip(Colors.white24, _filterType == e.key, () => setState(() { _filterType = _filterType == e.key ? null : e.key; _applyFilter(); }), icon: e.value, label: kTypeLabels[e.key]),
+                          )),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            _loading
+              ? SliverPadding(
+                  padding: const EdgeInsets.all(16),
+                  sliver: SliverList(delegate: SliverChildBuilderDelegate(
+                    (_, i) => Padding(padding: const EdgeInsets.only(bottom: 12), child: ShimmerBox(width: double.infinity, height: 120)),
+                    childCount: 5,
+                  )),
+                )
+              : _filtered.isEmpty
+                ? SliverFillRemaining(
+                    child: Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.sentiment_dissatisfied_outlined, size: 64, color: Colors.white.withOpacity(0.1)),
+                          const SizedBox(height: 16),
+                          Text('Ничего не найдено', style: TextStyle(color: Colors.white.withOpacity(0.3), fontSize: 16)),
+                        ],
+                      ),
+                    ),
+                  )
+                : SliverPadding(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 100),
+                    sliver: SliverList(delegate: SliverChildBuilderDelegate(
+                      (ctx, i) => _buildJokeCard(_filtered[i], i),
+                      childCount: _filtered.length,
+                    )),
+                  ),
+          ],
+        ),
+      ),
+    );
   }
+
+  Widget _filterChip(Color color, bool active, VoidCallback onTap, {IconData? icon, String? label}) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: active ? color.withOpacity(0.25) : kSurfaceLight,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: active ? color.withOpacity(0.5) : Colors.transparent),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (icon != null) ...[Icon(icon, size: 14, color: active ? color : Colors.white38), const SizedBox(width: 6)],
+            Text(label ?? '', style: TextStyle(color: active ? color : Colors.white38, fontSize: 12, fontWeight: FontWeight.w600)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildJokeCard(Joke joke, int index) {
+    final typeIcon = kTypeIcons[joke.type] ?? Icons.text_snippet_outlined;
+
+    return Dismissible(
+      key: ValueKey(joke.id),
+      direction: DismissDirection.endToStart,
+      background: Container(
+        margin: const EdgeInsets.only(bottom: 12),
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(colors: [kError, Color(0xFFFF4757)]),
+          borderRadius: BorderRadius.circular(20),
+        ),
+        alignment: Alignment.centerRight,
+        padding: const EdgeInsets.only(right: 24),
+        child: const Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [Icon(Icons.delete_outline, color: Colors.white), SizedBox(width: 8), Text('Удалить', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600))],
+        ),
+      ),
+      onDismissed: (_) => _delete(joke),
+      child: TweenAnimationBuilder<double>(
+        tween: Tween(begin: 0, end: 1),
+        duration: Duration(milliseconds: 400 + index * 80),
+        curve: Curves.easeOutCubic,
+        builder: (context, value, child) => Opacity(
+          opacity: value,
+          child: Transform.translate(offset: Offset(0, 20 * (1 - value)), child: child),
+        ),
+        child: GestureDetector(
+          onTap: () => _showAddSheet(joke: joke),
+          child: GlassCard(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(color: kPrimary.withOpacity(0.1), borderRadius: BorderRadius.circular(12)),
+                        child: Icon(typeIcon, color: kPrimary, size: 18),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(joke.setup, style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600, height: 1.3)),
+                            if (joke.punchline.isNotEmpty) ...[
+                              const SizedBox(height: 6),
+                              Text(joke.punchline, style: TextStyle(color: Colors.white.withOpacity(0.5), fontSize: 13, height: 1.3)),
+                            ],
+                          ],
+                        ),
+                      ),
+                      StatusBadge(status: joke.status),
+                    ],
+                  ),
+                  if (joke.tags.isNotEmpty) ...[
+                    const SizedBox(height: 12),
+                    Wrap(children: joke.tags.map((t) => TagChip(tag: t)).toList()),
+                  ],
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      _metaChip(Icons.calendar_today_outlined, '${joke.createdAt.day}.${joke.createdAt.month}.${joke.createdAt.year}'),
+                      const SizedBox(width: 12),
+                      _metaChip(Icons.mic_outlined, '${joke.timesPerformed} выст.'),
+                      const Spacer(),
+                      if (joke.rating > 0) ...[
+                        const Icon(Icons.star, color: kGold, size: 14),
+                        const SizedBox(width: 4),
+                        Text('${joke.rating}', style: const TextStyle(color: kGold, fontSize: 12, fontWeight: FontWeight.w600)),
+                      ],
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _metaChip(IconData icon, String text) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 12, color: Colors.white24),
+        const SizedBox(width: 4),
+        Text(text, style: TextStyle(color: Colors.white.withOpacity(0.25), fontSize: 11)),
+      ],
+    );
+  }
+
+  void _showAddSheet({Joke? joke}) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => AddJokeSheet(
+        joke: joke,
+        onSave: (newJoke) async {
+          if (joke != null) {
+            final idx = _jokes.indexWhere((j) => j.id == joke.id);
+            if (idx != -1) _jokes[idx] = newJoke;
+          } else {
+            _jokes.add(newJoke);
+            _showConfetti();
+          }
+          await JokeStorage.saveJokes(_jokes);
+          _applyFilter();
+          setState(() {});
+        },
+      ),
+    );
+  }
+
+  Route _fadeRoute(Widget page) => PageRouteBuilder(
+    pageBuilder: (_, __, ___) => page,
+    transitionsBuilder: (_, anim, __, child) => FadeTransition(opacity: anim, child: child),
+  );
 }
 
-class AddEditScreen extends StatefulWidget {
+// ═══════════════════════════════════════════════════════════════
+//  BOTTOM SHEET ДОБАВЛЕНИЯ / РЕДАКТИРОВАНИЯ
+// ═══════════════════════════════════════════════════════════════
+class AddJokeSheet extends StatefulWidget {
   final Joke? joke;
-  const AddEditScreen({super.key, this.joke});
+  final Function(Joke) onSave;
+  const AddJokeSheet({super.key, this.joke, required this.onSave});
+
   @override
-  State<AddEditScreen> createState() => _AddEditScreenState();
+  State<AddJokeSheet> createState() => _AddJokeSheetState();
 }
 
-class _AddEditScreenState extends State<AddEditScreen> {
-  final _title = TextEditingController(), _setup = TextEditingController(), _punchline = TextEditingController(), _tags = TextEditingController(), _time = TextEditingController(text: '1:00'), _notes = TextEditingController();
-  String _type = 'observation', _status = 'raw';
-  final tpMap = {'observation': 'Наблюдение', 'story': 'История', 'oneline': 'Одностишье', 'crowd': 'Взаимодействие', 'sketch': 'Скетч'};
-  final stMap = {'raw': 'Сырая идея', 'wip': 'На проработке', 'ready': 'Рабочая', 'stage': 'В сете', 'dead': 'Списана'};
+class _AddJokeSheetState extends State<AddJokeSheet> with SingleTickerProviderStateMixin {
+  late final _setupCtrl = TextEditingController(text: widget.joke?.setup);
+  late final _punchCtrl = TextEditingController(text: widget.joke?.punchline);
+  late final _tagsCtrl = TextEditingController(text: widget.joke?.tags.join(', '));
+  late final _notesCtrl = TextEditingController(text: widget.joke?.notes ?? '');
+  late String _type = widget.joke?.type ?? 'observation';
+  late String _status = widget.joke?.status ?? 'raw';
+  late int _rating = widget.joke?.rating ?? 0;
+  late AnimationController _animCtrl;
+  bool _shake = false;
+
   @override
-  void initState() { super.initState(); if (widget.joke != null) { final j = widget.joke!; _title.text = j.title; _setup.text = j.setup; _punchline.text = j.punchline; _tags.text = j.tags; _time.text = j.time; _notes.text = j.notes; _type = j.type; _status = j.status; } }
-  Future<void> _save() async {
-    if (_title.text.trim().isEmpty || _setup.text.trim().isEmpty || _punchline.text.trim().isEmpty) return;
-    final all = await Storage.load();
-    final j = Joke(id: widget.joke?.id ?? DateTime.now().millisecondsSinceEpoch, title: _title.text.trim(), setup: _setup.text.trim(), punchline: _punchline.text.trim(), type: _type, status: _status, tags: _tags.text.trim(), time: _time.text.trim(), notes: _notes.text.trim(), inSetlist: widget.joke?.inSetlist ?? 0, setlistOrder: widget.joke?.setlistOrder ?? 0);
-    if (widget.joke == null) { all.add(j); } else { final idx = all.indexWhere((x) => x.id == j.id); if (idx != -1) all[idx] = j; }
-    await Storage.save(all);
-    if (mounted) Navigator.pop(context);
+  void initState() {
+    super.initState();
+    _animCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 300));
   }
+
+  @override
+  void dispose() {
+    _setupCtrl.dispose(); _punchCtrl.dispose(); _tagsCtrl.dispose(); _notesCtrl.dispose();
+    _animCtrl.dispose();
+    super.dispose();
+  }
+
+  void _save() {
+    if (_setupCtrl.text.trim().isEmpty) {
+      setState(() => _shake = true);
+      _animCtrl.forward().then((_) => _animCtrl.reverse());
+      Future.delayed(const Duration(milliseconds: 500), () => setState(() => _shake = false));
+      return;
+    }
+    final joke = Joke(
+      id: widget.joke?.id ?? DateTime.now().millisecondsSinceEpoch.toString(),
+      setup: _setupCtrl.text.trim(),
+      punchline: _punchCtrl.text.trim(),
+      type: _type,
+      tags: _tagsCtrl.text.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toList(),
+      status: _status,
+      rating: _rating,
+      createdAt: widget.joke?.createdAt ?? DateTime.now(),
+      updatedAt: DateTime.now(),
+      timesPerformed: widget.joke?.timesPerformed ?? 0,
+      totalLaughs: widget.joke?.totalLaughs ?? 0,
+      notes: _notesCtrl.text.trim().isEmpty ? null : _notesCtrl.text.trim(),
+    );
+    widget.onSave(joke);
+    Navigator.pop(context);
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Scaffold(appBar: AppBar(title: Text(widget.joke == null ? 'Новая шутка' : 'Редактировать')), body: SingleChildScrollView(padding: const EdgeInsets.all(16), child: Column(children: [
-      TextField(controller: _title, decoration: const InputDecoration(labelText: 'Заголовок')),
-      const SizedBox(height: 16), Row(children: [Expanded(child: DropdownButtonFormField<String>(value: _type, decoration: const InputDecoration(labelText: 'Тип'), items: tpMap.entries.map((e) => DropdownMenuItem(value: e.key, child: Text(e.value))).toList(), onChanged: (v) => setState(() => _type = v!))), const SizedBox(width: 16), Expanded(child: DropdownButtonFormField<String>(value: _status, decoration: const InputDecoration(labelText: 'Статус'), items: stMap.entries.map((e) => DropdownMenuItem(value: e.key, child: Text(e.value))).toList(), onChanged: (v) => setState(() => _status = v!)))]),
-      const SizedBox(height: 16), TextField(controller: _setup, decoration: const InputDecoration(labelText: 'Сетап'), maxLines: 3), const SizedBox(height: 16), TextField(controller: _punchline, decoration: const InputDecoration(labelText: 'Панчлайн'), maxLines: 3),
-      const SizedBox(height: 16), Row(children: [Expanded(flex: 2, child: TextField(controller: _tags, decoration: const InputDecoration(labelText: 'Теги'))), const SizedBox(width: 16), Expanded(child: TextField(controller: _time, decoration: const InputDecoration(labelText: 'Время')))]),
-      const SizedBox(height: 16), TextField(controller: _notes, decoration: const InputDecoration(labelText: 'Заметки'), maxLines: 3),
-      const SizedBox(height: 24), SizedBox(width: double.infinity, child: FilledButton(onPressed: _save, child: const Text('СОХРАНИТЬ'))),
-    ])));
+    return Container(
+      decoration: const BoxDecoration(
+        color: kSurface,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+      ),
+      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom + 20),
+      child: DraggableScrollableSheet(
+        initialChildSize: 0.85,
+        minChildSize: 0.5,
+        maxChildSize: 0.95,
+        expand: false,
+        builder: (_, scrollCtrl) => SingleChildScrollView(
+          controller: scrollCtrl,
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(width: 40, height: 4, decoration: BoxDecoration(color: Colors.white12, borderRadius: BorderRadius.circular(4))),
+              ),
+              const SizedBox(height: 20),
+              Text(widget.joke == null ? 'Новая шутка' : 'Редактировать', style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w800, color: Colors.white)),
+              const SizedBox(height: 24),
+              _fieldLabel('Завязка / Сетап'),
+              _textField(_setupCtrl, hint: 'О чём шутка?', maxLines: 3, shake: _shake),
+              const SizedBox(height: 16),
+              _fieldLabel('Панчлайн'),
+              _textField(_punchCtrl, hint: 'Кульминация и финал...', maxLines: 2),
+              const SizedBox(height: 16),
+              _fieldLabel('Тип шутки'),
+              Wrap(
+                spacing: 8,
+                children: kTypeIcons.entries.map((e) => ChoiceChip(
+                  label: Text(kTypeLabels[e.key]!),
+                  selected: _type == e.key,
+                  onSelected: (_) => setState(() => _type = e.key),
+                  selectedColor: kPrimary.withOpacity(0.2),
+                  backgroundColor: kSurfaceLight,
+                  labelStyle: TextStyle(color: _type == e.key ? kPrimary : Colors.white54, fontWeight: FontWeight.w600),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: BorderSide(color: _type == e.key ? kPrimary.withOpacity(0.5) : Colors.transparent)),
+                )).toList(),
+              ),
+              const SizedBox(height: 16),
+              _fieldLabel('Статус'),
+              Wrap(
+                spacing: 8,
+                children: kStatusColors.entries.map((e) => ChoiceChip(
+                  label: Text(kStatusLabels[e.key]!),
+                  selected: _status == e.key,
+                  onSelected: (_) => setState(() => _status = e.key),
+                  selectedColor: e.value.withOpacity(0.2),
+                  backgroundColor: kSurfaceLight,
+                  labelStyle: TextStyle(color: _status == e.key ? e.value : Colors.white54, fontWeight: FontWeight.w600),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: BorderSide(color: _status == e.key ? e.value.withOpacity(0.5) : Colors.transparent)),
+                )).toList(),
+              ),
+              const SizedBox(height: 16),
+              _fieldLabel('Рейтинг'),
+              Row(
+                children: List.generate(5, (i) => GestureDetector(
+                  onTap: () => setState(() => _rating = i + 1),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 200),
+                    padding: const EdgeInsets.all(4),
+                    child: Icon(i < _rating ? Icons.star_rounded : Icons.star_border_rounded, color: i < _rating ? kGold : Colors.white24, size: 32),
+                  ),
+                )),
+              ),
+              const SizedBox(height: 16),
+              _fieldLabel('Теги (через запятую)'),
+              _textField(_tagsCtrl, hint: 'сарказм, работа, коты'),
+              const SizedBox(height: 16),
+              _fieldLabel('Заметки'),
+              _textField(_notesCtrl, hint: 'Дополнительные заметки...', maxLines: 2),
+              const SizedBox(height: 24),
+              SizedBox(
+                width: double.infinity,
+                height: 56,
+                child: GestureDetector(
+                  onTap: _save,
+                  child: Container(
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(colors: [kPrimary, Color(0xFF8B5CF6)]),
+                      borderRadius: BorderRadius.circular(20),
+                      boxShadow: [BoxShadow(color: kPrimary.withOpacity(0.3), blurRadius: 20, spreadRadius: 2)],
+                    ),
+                    alignment: Alignment.center,
+                    child: Text(widget.joke == null ? 'Сохранить шутку' : 'Обновить', style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w700)),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              if (widget.joke != null)
+                Center(
+                  child: TextButton(
+                    onPressed: () { Navigator.pop(context); },
+                    child: const Text('Отмена', style: TextStyle(color: Colors.white38)),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _fieldLabel(String text) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Text(text, style: TextStyle(color: Colors.white.withOpacity(0.5), fontSize: 13, fontWeight: FontWeight.w600)),
+    );
+  }
+
+  Widget _textField(TextEditingController ctrl, {String? hint, int maxLines = 1, bool shake = false}) {
+    return AnimatedBuilder(
+      animation: _animCtrl,
+      builder: (context, child) {
+        final offset = shake ? sin(_animCtrl.value * pi * 8) * 8 : 0.0;
+        return Transform.translate(
+          offset: Offset(offset, 0),
+          child: child,
+        );
+      },
+      child: TextField(
+        controller: ctrl,
+        maxLines: maxLines,
+        style: const TextStyle(color: Colors.white),
+        decoration: InputDecoration(
+          hintText: hint,
+          hintStyle: TextStyle(color: Colors.white.withOpacity(0.2)),
+          filled: true,
+          fillColor: kSurfaceLight,
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide.none),
+          focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: const BorderSide(color: kPrimary, width: 1.5)),
+          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        ),
+      ),
+    );
   }
 }
 
+// ═══════════════════════════════════════════════════════════════
+//  ЭКРАН СЕТЛИСТА
+// ═══════════════════════════════════════════════════════════════
 class SetlistScreen extends StatefulWidget {
   const SetlistScreen({super.key});
   @override
@@ -147,23 +1109,156 @@ class SetlistScreen extends StatefulWidget {
 }
 
 class _SetlistScreenState extends State<SetlistScreen> {
-  List<Joke> setlist = [];
+  List<Joke> _jokes = [];
+  List<String> _setlist = [];
+  bool _loading = true;
+
   @override
-  void initState() { super.initState(); _load(); }
-  Future<void> _load() async { final all = await Storage.load(); setState(() => setlist = all.where((j) => j.inSetlist == 1).toList()..sort((a, b) => a.setlistOrder.compareTo(b.setlistOrder))); }
-  Future<void> _remove(int id) async { final all = await Storage.load(); final idx = all.indexWhere((x) => x.id == id); if (idx != -1) { all[idx].inSetlist = 0; all[idx].setlistOrder = 0; } await Storage.save(all); _load(); }
-  Future<void> _clear() async { final all = await Storage.load(); for (final j in all) { j.inSetlist = 0; j.setlistOrder = 0; } await Storage.save(all); _load(); }
-  int _sec() { int t = 0; for (final j in setlist) { final p = j.time.split(':'); t += (int.tryParse(p[0]) ?? 0) * 60 + (int.tryParse(p[1]) ?? 0); } return t; }
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    _jokes = await JokeStorage.loadJokes();
+    _setlist = await JokeStorage.loadSetlist();
+    setState(() => _loading = false);
+  }
+
+  Future<void> _save() async {
+    await JokeStorage.saveSetlist(_setlist);
+  }
+
+  void _addToSetlist() async {
+    final available = _jokes.where((j) => !_setlist.contains(j.id)).toList();
+    if (available.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Все шутки уже в сетлисте'), backgroundColor: kSurfaceLight),
+      );
+      return;
+    }
+    final selected = await showDialog<Joke>(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: kSurface,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        title: const Text('Добавить шутку', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: ListView.builder(
+            shrinkWrap: true,
+            itemCount: available.length,
+            itemBuilder: (_, i) => ListTile(
+              title: Text(available[i].setup, style: const TextStyle(color: Colors.white, fontSize: 14)),
+              subtitle: Text(kTypeLabels[available[i].type] ?? available[i].type, style: TextStyle(color: Colors.white.withOpacity(0.4), fontSize: 12)),
+              trailing: const Icon(Icons.add, color: kPrimary),
+              onTap: () => Navigator.pop(context, available[i]),
+            ),
+          ),
+        ),
+      ),
+    );
+    if (selected != null) {
+      setState(() => _setlist.add(selected.id));
+      await _save();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    final sec = _sec();
-    return Column(children: [
-      if (setlist.isNotEmpty) Padding(padding: const EdgeInsets.all(12), child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text('Шуток: ${setlist.length}'), Text('Время: ${sec ~/ 60}:${(sec % 60).toString().padLeft(2, '0')}')])), Expanded(child: setlist.isEmpty ? const Center(child: Text('Сет-лист пуст')) : ReorderableListView.builder(padding: const EdgeInsets.symmetric(horizontal: 12), itemCount: setlist.length, onReorder: (o, n) async { if (n > o) n--; final item = setlist.removeAt(o); setlist.insert(n, item); final all = await Storage.load(); for (int i = 0; i < setlist.length; i++) { final idx = all.indexWhere((x) => x.id == setlist[i].id); if (idx != -1) all[idx].setlistOrder = i; } await Storage.save(all); setState(() {}); }, itemBuilder: (c, i) => ListTile(key: ValueKey(setlist[i].id), leading: CircleAvatar(child: Text('${i + 1}')), title: Text(setlist[i].title), subtitle: Text('${setlist[i].time} · ${setlist[i].tags.split(',').first}'), trailing: IconButton(icon: const Icon(Icons.remove_circle_outline, color: Colors.red), onPressed: () => _remove(setlist[i].id))))),
-      if (setlist.isNotEmpty) Padding(padding: const EdgeInsets.all(12), child: Row(children: [Expanded(child: OutlinedButton(onPressed: _clear, child: const Text('Очистить'))), const SizedBox(width: 12), Expanded(child: FilledButton(onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const PerformanceScreen())), child: const Text('РЕЖИМ ВЫСТУПЛЕНИЯ')))])),
-    ]);
+    final setJokes = _setlist.map((id) => _jokes.firstWhere((j) => j.id == id, orElse: () => Joke(id: '', setup: '[удалена]', punchline: '', createdAt: DateTime.now()))).toList();
+
+    return Scaffold(
+      backgroundColor: kBackground,
+      floatingActionButton: AnimatedFAB(
+        extended: true,
+        onPressed: _addToSetlist,
+      ),
+      body: CustomScrollView(
+        slivers: [
+          SliverAppBar(
+            expandedHeight: 120,
+            pinned: true,
+            backgroundColor: Colors.transparent,
+            flexibleSpace: FlexibleSpaceBar(
+              background: Container(
+                decoration: const BoxDecoration(gradient: LinearGradient(colors: [Color(0xFF1A1A2E), kBackground])),
+                child: SafeArea(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text('Сетлист', style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800, color: Colors.white)),
+                        Text('${_setlist.length} шуток в выступлении', style: TextStyle(color: Colors.white.withOpacity(0.4), fontSize: 13)),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          _loading
+            ? SliverPadding(
+                padding: const EdgeInsets.all(16),
+                sliver: SliverList(delegate: SliverChildBuilderDelegate((_, __) => Padding(padding: const EdgeInsets.only(bottom: 12), child: ShimmerBox(width: double.infinity, height: 80)), childCount: 4)),
+              )
+            : setJokes.isEmpty
+              ? SliverFillRemaining(
+                  child: Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.queue_music_outlined, size: 64, color: Colors.white.withOpacity(0.1)),
+                        const SizedBox(height: 16),
+                        Text('Сетлист пуст', style: TextStyle(color: Colors.white.withOpacity(0.3))),
+                        const SizedBox(height: 8),
+                        Text('Добавь шутки для выступления', style: TextStyle(color: Colors.white.withOpacity(0.2), fontSize: 12)),
+                      ],
+                    ),
+                  ),
+                )
+              : SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 100),
+                  sliver: SliverList(
+                    delegate: SliverChildBuilderDelegate(
+                      (ctx, i) {
+                        final joke = setJokes[i];
+                        if (joke.id.isEmpty) return const SizedBox.shrink();
+                        return GlassCard(
+                          child: ListTile(
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                            leading: Container(
+                              width: 32, height: 32,
+                              decoration: BoxDecoration(color: kPrimary.withOpacity(0.1), borderRadius: BorderRadius.circular(10)),
+                              alignment: Alignment.center,
+                              child: Text('${i + 1}', style: const TextStyle(color: kPrimary, fontWeight: FontWeight.w700)),
+                            ),
+                            title: Text(joke.setup, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 14)),
+                            subtitle: Text(kTypeLabels[joke.type] ?? joke.type, style: TextStyle(color: Colors.white.withOpacity(0.4), fontSize: 12)),
+                            trailing: IconButton(
+                              icon: const Icon(Icons.delete_outline, color: Colors.white24, size: 20),
+                              onPressed: () async {
+                                setState(() => _setlist.removeAt(i));
+                                await _save();
+                              },
+                            ),
+                          ),
+                        );
+                      },
+                      childCount: setJokes.length,
+                    ),
+                  ),
+                ),
+        ],
+      ),
+    );
   }
 }
 
+// ═══════════════════════════════════════════════════════════════
+//  ЭКРАН СТАТИСТИКИ
+// ═══════════════════════════════════════════════════════════════
 class StatsScreen extends StatefulWidget {
   const StatsScreen({super.key});
   @override
@@ -171,25 +1266,196 @@ class StatsScreen extends StatefulWidget {
 }
 
 class _StatsScreenState extends State<StatsScreen> {
-  Map<String, dynamic>? stats;
-  final stMap = {'raw': 'Сырая', 'wip': 'Проработка', 'ready': 'Рабочая', 'stage': 'В сете', 'dead': 'Списана'};
-  final stColor = {'raw': Colors.grey, 'wip': Colors.orange, 'ready': Colors.green, 'stage': Colors.blue, 'dead': Colors.red};
+  List<Joke> _jokes = [];
+  bool _loading = true;
+
   @override
-  void initState() { super.initState(); _load(); }
-  Future<void> _load() async { final all = await Storage.load(); final t = all.length; final r = all.where((j) => j.status == 'ready' || j.status == 'stage').length; final rw = all.where((j) => j.status == 'raw').length; final sl = all.where((j) => j.inSetlist == 1).length; final sc = <String, int>{}; for (final j in all) { sc[j.status] = (sc[j.status] ?? 0) + 1; } setState(() => stats = {'total': t, 'ready': r, 'raw': rw, 'setlist': sl, 'statusCounts': sc}); }
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    _jokes = await JokeStorage.loadJokes();
+    setState(() => _loading = false);
+  }
+
   @override
   Widget build(BuildContext context) {
-    if (stats == null) return const Center(child: CircularProgressIndicator());
-    final t = stats!['total'] as int; final r = stats!['ready'] as int; final rw = stats!['raw'] as int; final sl = stats!['setlist'] as int; final sc = stats!['statusCounts'] as Map<String, int>;
-    return SingleChildScrollView(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      GridView.count(shrinkWrap: true, physics: const NeverScrollableScrollPhysics(), crossAxisCount: 2, childAspectRatio: 1.4, mainAxisSpacing: 12, crossAxisSpacing: 12, children: [_card(t.toString(), 'Всего'), _card(r.toString(), 'Готовых'), _card(rw.toString(), 'Сырых'), _card(sl.toString(), 'В сете')]),
-      const SizedBox(height: 24), const Text('По статусам', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: Colors.grey)), const SizedBox(height: 12),
-      ...sc.entries.map((e) { final mx = t == 0 ? 1 : t; return Padding(padding: const EdgeInsets.only(bottom: 10), child: Row(children: [SizedBox(width: 100, child: Text(stMap[e.key] ?? e.key, style: const TextStyle(fontSize: 13))), Expanded(child: ClipRRect(borderRadius: BorderRadius.circular(6), child: LinearProgressIndicator(value: e.value / mx, minHeight: 18, backgroundColor: Colors.grey[200], valueColor: AlwaysStoppedAnimation(stColor[e.key] ?? Colors.grey)))), const SizedBox(width: 8), SizedBox(width: 30, child: Text('${e.value}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500)))])); }).toList(),
-    ]));
+    final total = _jokes.length;
+    final byStatus = <String, int>{};
+    final byType = <String, int>{};
+    int performed = 0;
+    int laughs = 0;
+    for (final j in _jokes) {
+      byStatus[j.status] = (byStatus[j.status] ?? 0) + 1;
+      byType[j.type] = (byType[j.type] ?? 0) + 1;
+      performed += j.timesPerformed;
+      laughs += j.totalLaughs;
+    }
+
+    return Scaffold(
+      backgroundColor: kBackground,
+      body: RefreshIndicator(
+        onRefresh: _load,
+        color: kPrimary,
+        backgroundColor: kSurface,
+        child: CustomScrollView(
+          physics: const BouncingScrollPhysics(),
+          slivers: [
+            SliverAppBar(
+              expandedHeight: 120,
+              pinned: true,
+              backgroundColor: Colors.transparent,
+              flexibleSpace: FlexibleSpaceBar(
+                background: Container(
+                  decoration: const BoxDecoration(gradient: LinearGradient(colors: [Color(0xFF1A1A2E), kBackground])),
+                  child: SafeArea(
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('Статистика', style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800, color: Colors.white)),
+                          Text('Аналитика твоего стендапа', style: TextStyle(color: Colors.white.withOpacity(0.4), fontSize: 13)),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            _loading
+              ? SliverPadding(
+                  padding: const EdgeInsets.all(16),
+                  sliver: SliverList(delegate: SliverChildBuilderDelegate((_, __) => Padding(padding: const EdgeInsets.only(bottom: 12), child: ShimmerBox(width: double.infinity, height: 100)), childCount: 4)),
+                )
+              : SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 40),
+                  sliver: SliverList(
+                    delegate: SliverChildListDelegate([
+                      _statGrid([
+                        _StatItem('Всего шуток', total.toString(), Icons.format_quote, kPrimary),
+                        _StatItem('Выступлений', performed.toString(), Icons.mic, kSecondary),
+                        _StatItem('Смеха', laughs.toString(), Icons.sentiment_very_satisfied, kAccent),
+                        _StatItem('Средний рейтинг', total > 0 ? (_jokes.fold(0, (s, j) => s + j.rating) / total).toStringAsFixed(1) : '0.0', Icons.star, kGold),
+                      ]),
+                      const SizedBox(height: 24),
+                      _sectionTitle('По статусам'),
+                      const SizedBox(height: 12),
+                      ...byStatus.entries.map((e) => _progressBar(kStatusLabels[e.key] ?? e.key, e.value, total, kStatusColors[e.key] ?? Colors.grey)),
+                      const SizedBox(height: 24),
+                      _sectionTitle('По типам'),
+                      const SizedBox(height: 12),
+                      ...byType.entries.map((e) => _progressBar(kTypeLabels[e.key] ?? e.key, e.value, total, kPrimary)),
+                      const SizedBox(height: 24),
+                      _sectionTitle('Топ шутки'),
+                      const SizedBox(height: 12),
+                      ...(_jokes..sort((a, b) => b.rating.compareTo(a.rating))).take(3).map((j) => GlassCard(
+                        child: ListTile(
+                          contentPadding: const EdgeInsets.all(16),
+                          leading: Container(
+                            width: 40, height: 40,
+                            decoration: BoxDecoration(color: kGold.withOpacity(0.1), borderRadius: BorderRadius.circular(12)),
+                            alignment: Alignment.center,
+                            child: const Icon(Icons.emoji_events, color: kGold),
+                          ),
+                          title: Text(j.setup, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 14)),
+                          subtitle: Text('${j.timesPerformed} выст. • ${j.totalLaughs} смеха', style: TextStyle(color: Colors.white.withOpacity(0.4), fontSize: 12)),
+                          trailing: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(Icons.star, color: kGold, size: 16),
+                              const SizedBox(width: 4),
+                              Text('${j.rating}', style: const TextStyle(color: kGold, fontWeight: FontWeight.w700)),
+                            ],
+                          ),
+                        ),
+                      )),
+                    ]),
+                  ),
+                ),
+          ],
+        ),
+      ),
+    );
   }
-  Widget _card(String v, String l) => Container(decoration: BoxDecoration(border: Border.all(color: Colors.grey[300]!), borderRadius: BorderRadius.circular(12)), padding: const EdgeInsets.all(16), child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [Text(v, style: const TextStyle(fontSize: 32, fontWeight: FontWeight.w500)), const SizedBox(height: 4), Text(l, style: TextStyle(fontSize: 12, color: Colors.grey[600]))]));
+
+  Widget _statGrid(List<_StatItem> items) {
+    return GridView.count(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      crossAxisCount: 2,
+      mainAxisSpacing: 12,
+      crossAxisSpacing: 12,
+      childAspectRatio: 1.4,
+      children: items.map((item) => GlassCard(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(item.icon, color: item.color, size: 24),
+              const Spacer(),
+              Text(item.value, style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w800, color: Colors.white)),
+              const SizedBox(height: 4),
+              Text(item.label, style: TextStyle(color: Colors.white.withOpacity(0.4), fontSize: 12)),
+            ],
+          ),
+        ),
+      )).toList(),
+    );
+  }
+
+  Widget _sectionTitle(String text) {
+    return Text(text, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: Colors.white));
+  }
+
+  Widget _progressBar(String label, int value, int total, Color color) {
+    final pct = total > 0 ? value / total : 0.0;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(label, style: const TextStyle(color: Colors.white70, fontSize: 13)),
+              Text('$value (${(pct * 100).toStringAsFixed(0)}%)', style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w600)),
+            ],
+          ),
+          const SizedBox(height: 6),
+          TweenAnimationBuilder<double>(
+            tween: Tween(begin: 0, end: pct),
+            duration: const Duration(milliseconds: 800),
+            curve: Curves.easeOutCubic,
+            builder: (ctx, val, _) => Container(
+              height: 6,
+              decoration: BoxDecoration(color: kSurfaceLight, borderRadius: BorderRadius.circular(3)),
+              child: FractionallySizedBox(
+                alignment: Alignment.centerLeft,
+                widthFactor: val,
+                child: Container(decoration: BoxDecoration(gradient: LinearGradient(colors: [color, color.withOpacity(0.7)]), borderRadius: BorderRadius.circular(3))),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
+class _StatItem {
+  final String label, value;
+  final IconData icon;
+  final Color color;
+  _StatItem(this.label, this.value, this.icon, this.color);
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  ЭКРАН ВЫСТУПЛЕНИЯ
+// ═══════════════════════════════════════════════════════════════
 class PerformanceScreen extends StatefulWidget {
   const PerformanceScreen({super.key});
   @override
@@ -197,21 +1463,404 @@ class PerformanceScreen extends StatefulWidget {
 }
 
 class _PerformanceScreenState extends State<PerformanceScreen> {
-  List<Joke> setlist = [];
-  int idx = 0;
-  bool show = false;
+  List<Joke> _jokes = [];
+  List<String> _setlist = [];
+  bool _loading = true;
+  bool _running = false;
+  int _currentIndex = 0;
+  Stopwatch _stopwatch = Stopwatch();
+  Timer? _timer;
+
   @override
-  void initState() { super.initState(); _load(); }
-  Future<void> _load() async { final all = await Storage.load(); setState(() => setlist = all.where((j) => j.inSetlist == 1).toList()..sort((a, b) => a.setlistOrder.compareTo(b.setlistOrder))); }
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    _jokes = await JokeStorage.loadJokes();
+    _setlist = await JokeStorage.loadSetlist();
+    setState(() => _loading = false);
+  }
+
+  void _toggleTimer() {
+    setState(() {
+      _running = !_running;
+      if (_running) {
+        _stopwatch.start();
+        _timer = Timer.periodic(const Duration(milliseconds: 100), (_) => setState(() {}));
+      } else {
+        _stopwatch.stop();
+        _timer?.cancel();
+      }
+    });
+  }
+
+  void _reset() {
+    setState(() {
+      _running = false;
+      _stopwatch.reset();
+      _currentIndex = 0;
+      _timer?.cancel();
+    });
+  }
+
+  void _next() {
+    if (_currentIndex < _setlist.length - 1) {
+      setState(() => _currentIndex++);
+    }
+  }
+
+  void _prev() {
+    if (_currentIndex > 0) {
+      setState(() => _currentIndex--);
+    }
+  }
+
+  String _formatTime(Duration d) {
+    final m = d.inMinutes.remainder(60).toString().padLeft(2, '0');
+    final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
+    final ms = (d.inMilliseconds.remainder(1000) ~/ 10).toString().padLeft(2, '0');
+    return '$m:$s.$ms';
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
-    if (setlist.isEmpty) return const Scaffold(body: Center(child: Text('Сет-лист пуст')));
-    final j = setlist[idx];
-    return Scaffold(backgroundColor: Colors.black, body: SafeArea(child: GestureDetector(onTap: () => setState(() => show = !show), onHorizontalDragEnd: (d) { if (d.primaryVelocity == null) return; if (d.primaryVelocity! < -200 && idx < setlist.length - 1) setState(() { idx++; show = false; }); else if (d.primaryVelocity! > 200 && idx > 0) setState(() { idx--; show = false; }); }, child: Padding(padding: const EdgeInsets.all(24), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text('${idx + 1} / ${setlist.length}', style: TextStyle(color: Colors.grey[500], fontSize: 14)), Text(j.time, style: TextStyle(color: Colors.grey[500], fontSize: 14))]),
-      const SizedBox(height: 40), Text(j.title, style: const TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.w500)), const SizedBox(height: 32),
-      if (show) ...[Text(j.setup, style: TextStyle(color: Colors.grey[300], fontSize: 20, height: 1.4)), const SizedBox(height: 24), Text(j.punchline, style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w500, height: 1.4))] else ...[const Spacer(), Center(child: Text('Нажмите, чтобы показать текст', style: TextStyle(color: Colors.grey[600], fontSize: 16))), const Spacer()],
-      const SizedBox(height: 40), Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [if (idx > 0) TextButton.icon(onPressed: () => setState(() { idx--; show = false; }), icon: const Icon(Icons.arrow_back, color: Colors.white), label: const Text('Назад', style: TextStyle(color: Colors.white))) else const SizedBox(), if (idx < setlist.length - 1) TextButton.icon(onPressed: () => setState(() { idx++; show = false; }), icon: const Icon(Icons.arrow_forward, color: Colors.white), label: const Text('Вперёд', style: TextStyle(color: Colors.white))) else const SizedBox()]),
-    ])))));
+    final setJokes = _setlist.map((id) => _jokes.firstWhere((j) => j.id == id, orElse: () => Joke(id: '', setup: '', punchline: '', createdAt: DateTime.now()))).where((j) => j.id.isNotEmpty).toList();
+    final currentJoke = _currentIndex < setJokes.length ? setJokes[_currentIndex] : null;
+
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text('Режим выступления', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: Colors.white)),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    decoration: BoxDecoration(color: _running ? kSecondary.withOpacity(0.15) : Colors.white.withOpacity(0.05), borderRadius: BorderRadius.circular(20)),
+                    child: Text(_running ? 'ИДЁТ' : 'ПАУЗА', style: TextStyle(color: _running ? kSecondary : Colors.white38, fontSize: 11, fontWeight: FontWeight.w700)),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 32),
+              Container(
+                padding: const EdgeInsets.all(32),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(colors: [kPrimary.withOpacity(0.1), Colors.transparent]),
+                  shape: BoxShape.circle,
+                  border: Border.all(color: kPrimary.withOpacity(0.2)),
+                ),
+                child: Text(
+                  _formatTime(_stopwatch.elapsed),
+                  style: TextStyle(fontSize: 56, fontWeight: FontWeight.w200, color: _running ? Colors.white : Colors.white38, fontFeatures: const [FontFeature.tabularFigures()]),
+                ),
+              ),
+              const SizedBox(height: 32),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  _ctrlBtn(Icons.skip_previous, _prev),
+                  const SizedBox(width: 20),
+                  GestureDetector(
+                    onTap: _toggleTimer,
+                    child: Container(
+                      width: 72, height: 72,
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(colors: _running ? [kError, Color(0xFFFF4757)] : [kSecondary, Color(0xFF00E5FF)]),
+                        shape: BoxShape.circle,
+                        boxShadow: [BoxShadow(color: (_running ? kError : kSecondary).withOpacity(0.4), blurRadius: 24)],
+                      ),
+                      child: Icon(_running ? Icons.pause : Icons.play_arrow, color: Colors.white, size: 32),
+                    ),
+                  ),
+                  const SizedBox(width: 20),
+                  _ctrlBtn(Icons.skip_next, _next),
+                ],
+              ),
+              const SizedBox(height: 16),
+              TextButton(
+                onPressed: _reset,
+                child: const Text('Сбросить', style: TextStyle(color: Colors.white24)),
+              ),
+              const SizedBox(height: 24),
+              if (currentJoke != null) ...[
+                GlassCard(
+                  child: Padding(
+                    padding: const EdgeInsets.all(20),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                              decoration: BoxDecoration(color: kPrimary.withOpacity(0.15), borderRadius: BorderRadius.circular(8)),
+                              child: Text('${_currentIndex + 1} / ${setJokes.length}', style: const TextStyle(color: kPrimary, fontSize: 12, fontWeight: FontWeight.w700)),
+                            ),
+                            const Spacer(),
+                            StatusBadge(status: currentJoke.status),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        Text(currentJoke.setup, style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700, height: 1.4)),
+                        if (currentJoke.punchline.isNotEmpty) ...[
+                          const SizedBox(height: 8),
+                          Text(currentJoke.punchline, style: TextStyle(color: Colors.white.withOpacity(0.5), fontSize: 15, height: 1.4)),
+                        ],
+                        if (currentJoke.notes != null) ...[
+                          const SizedBox(height: 12),
+                          Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(color: kGold.withOpacity(0.05), borderRadius: BorderRadius.circular(12), border: Border.all(color: kGold.withOpacity(0.1))),
+                            child: Row(
+                              children: [
+                                const Icon(Icons.lightbulb_outline, color: kGold, size: 16),
+                                const SizedBox(width: 8),
+                                Expanded(child: Text(currentJoke.notes!, style: TextStyle(color: kGold.withOpacity(0.7), fontSize: 12))),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+              ] else ...[
+                const Spacer(),
+                Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.mic_off_outlined, size: 64, color: Colors.white.withOpacity(0.1)),
+                      const SizedBox(height: 16),
+                      Text('Нет шуток в сетлисте', style: TextStyle(color: Colors.white.withOpacity(0.3))),
+                    ],
+                  ),
+                ),
+                const Spacer(),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
   }
+
+  Widget _ctrlBtn(IconData icon, VoidCallback onTap) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 48, height: 48,
+        decoration: BoxDecoration(color: Colors.white.withOpacity(0.05), shape: BoxShape.circle),
+        child: Icon(icon, color: Colors.white54, size: 24),
+      ),
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  ЭКРАН НАСТРОЕК
+// ═══════════════════════════════════════════════════════════════
+class SettingsScreen extends StatefulWidget {
+  const SettingsScreen({super.key});
+  @override
+  State<SettingsScreen> createState() => _SettingsScreenState();
+}
+
+class _SettingsScreenState extends State<SettingsScreen> {
+  bool _exporting = false;
+
+  Future<void> _export() async {
+    setState(() => _exporting = true);
+    final jokes = await JokeStorage.loadJokes();
+    final setlist = await JokeStorage.loadSetlist();
+    final data = jsonEncode({'jokes': jokes.map((j) => j.toJson()).toList(), 'setlist': setlist, 'exportedAt': DateTime.now().toIso8601String()});
+    await Clipboard.setData(ClipboardData(text: data));
+    setState(() => _exporting = false);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('JSON скопирован в буфер обмена'), backgroundColor: kSurfaceLight),
+      );
+    }
+  }
+
+  Future<void> _import() async {
+    final clip = await Clipboard.getData(Clipboard.kTextPlain);
+    if (clip?.text == null) return;
+    try {
+      final data = jsonDecode(clip!.text!);
+      final jokes = (data['jokes'] as List).map((e) => Joke.fromJson(e)).toList();
+      final setlist = List<String>.from(data['setlist'] ?? []);
+      await JokeStorage.saveJokes(jokes);
+      await JokeStorage.saveSetlist(setlist);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Импорт завершён успешно'), backgroundColor: kSecondary),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Ошибка импорта: $e'), backgroundColor: kError),
+        );
+      }
+    }
+  }
+
+  Future<void> _clearAll() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: kSurface,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        title: const Text('Очистить всё?', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+        content: const Text('Все шутки и сетлист будут удалены безвозвратно.', style: TextStyle(color: Colors.white70)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Отмена', style: TextStyle(color: Colors.white38))),
+          TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('Удалить', style: TextStyle(color: kError, fontWeight: FontWeight.w700))),
+        ],
+      ),
+    );
+    if (ok == true) {
+      await JokeStorage.saveJokes([]);
+      await JokeStorage.saveSetlist([]);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Все данные удалены'), backgroundColor: kSurfaceLight),
+        );
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: kBackground,
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        leading: IconButton(icon: const Icon(Icons.arrow_back, color: Colors.white), onPressed: () => Navigator.pop(context)),
+        title: const Text('Настройки', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+      ),
+      body: ListView(
+        padding: const EdgeInsets.all(20),
+        children: [
+          _sectionTitle('Данные'),
+          const SizedBox(height: 12),
+          _settingTile(Icons.upload_outlined, 'Экспорт JSON', 'Скопировать все шутки в буфер', _export, loading: _exporting),
+          _settingTile(Icons.download_outlined, 'Импорт JSON', 'Вставить из буфера обмена', _import),
+          _settingTile(Icons.delete_forever_outlined, 'Очистить всё', 'Удалить все шутки', _clearAll, danger: true),
+          const SizedBox(height: 32),
+          _sectionTitle('О приложении'),
+          const SizedBox(height: 12),
+          GlassCard(
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                children: [
+                  Container(
+                    width: 64, height: 64,
+                    decoration: BoxDecoration(gradient: const LinearGradient(colors: [kPrimary, Color(0xFF8B5CF6)]), borderRadius: BorderRadius.circular(20)),
+                    child: const Icon(Icons.format_quote, color: Colors.white, size: 32),
+                  ),
+                  const SizedBox(height: 16),
+                  const Text('Панчлайн', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: Colors.white)),
+                  const SizedBox(height: 4),
+                  Text('v2.0 • Современный дизайн', style: TextStyle(color: Colors.white.withOpacity(0.4), fontSize: 13)),
+                  const SizedBox(height: 16),
+                  Text('Приложение для комиков. Храни, организуй и выступай с лучшими шутками.', textAlign: TextAlign.center, style: TextStyle(color: Colors.white.withOpacity(0.3), fontSize: 12)),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _sectionTitle(String text) {
+    return Text(text, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: Colors.white38, letterSpacing: 1));
+  }
+
+  Widget _settingTile(IconData icon, String title, String subtitle, VoidCallback onTap, {bool danger = false, bool loading = false}) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: GlassCard(
+        child: ListTile(
+          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+          leading: Icon(icon, color: danger ? kError : Colors.white54),
+          title: Text(title, style: TextStyle(color: danger ? kError : Colors.white, fontWeight: FontWeight.w600)),
+          subtitle: Text(subtitle, style: TextStyle(color: Colors.white.withOpacity(0.3), fontSize: 12)),
+          trailing: loading ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: kPrimary)) : const Icon(Icons.chevron_right, color: Colors.white24),
+          onTap: onTap,
+        ),
+      ),
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  MAIN
+// ═══════════════════════════════════════════════════════════════
+class PunchlineApp extends StatelessWidget {
+  const PunchlineApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'Панчлайн',
+      debugShowCheckedModeBanner: false,
+      theme: ThemeData.dark().copyWith(
+        scaffoldBackgroundColor: kBackground,
+        colorScheme: const ColorScheme.dark(
+          primary: kPrimary,
+          secondary: kSecondary,
+          surface: kSurface,
+          background: kBackground,
+          error: kError,
+        ),
+        cardTheme: CardTheme(
+          elevation: 0,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          color: kSurface,
+        ),
+        bottomSheetTheme: const BottomSheetThemeData(
+          backgroundColor: kSurface,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(28))),
+        ),
+        dialogTheme: DialogTheme(
+          backgroundColor: kSurface,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        ),
+        snackBarTheme: SnackBarThemeData(
+          backgroundColor: kSurfaceLight,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          behavior: SnackBarBehavior.floating,
+        ),
+      ),
+      home: const HomeScreen(),
+    );
+  }
+}
+
+void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+  SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
+    statusBarColor: Colors.transparent,
+    statusBarIconBrightness: Brightness.light,
+    systemNavigationBarColor: kSurface,
+    systemNavigationBarIconBrightness: Brightness.light,
+  ));
+  runApp(const PunchlineApp());
 }
