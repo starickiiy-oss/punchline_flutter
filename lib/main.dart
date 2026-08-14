@@ -688,7 +688,7 @@ class _JokesScreenState extends State<JokesScreen> with TickerProviderStateMixin
                             ),
                           ),
                           const SizedBox(width: 8),
-                          _filterChip('Все', _filterStatus == null && _filterType == null, () => setState(() { _filterStatus = null; _filterType = null; _applyFilter(); })),
+                          _filterChip(Colors.white38, _filterStatus == null && _filterType == null, () => setState(() { _filterStatus = null; _filterType = null; _applyFilter(); }), label: 'Все'),
                         ],
                       ),
                     const SizedBox(height: 12),
