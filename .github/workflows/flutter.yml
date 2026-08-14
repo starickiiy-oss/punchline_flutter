@@ -1,1 +1,32 @@
+name: Build Punchline APK
 
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.0'
+          channel: 'stable'
+
+      - name: Create Flutter Project
+        run: |
+          flutter create --project-name punchline --org com.example punchline_app
+          cp lib/main.dart punchline_app/lib/main.dart
+          cd punchline_app
+          flutter pub add shared_preferences
+          flutter build apk --release
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: punchline-apk
+          path: punchline_app/build/app/outputs/flutter-apk/app-release.apk
