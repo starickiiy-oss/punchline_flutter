@@ -11,42 +11,39 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: '3.24.0'
-          channel: 'stable'
-
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Accept Android Licenses
-        run: yes | flutter doctor --android-licenses || true
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.0'
+          channel: 'stable'
 
-      - name: Create Flutter Project & Patch Build Config
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          cmdline-tools-version: 11076708
+          packages: 'platform-tools platforms;android-34 build-tools;34.0.0'
+
+      - name: Create Flutter Project
         run: |
+          flutter config --no-analytics
           flutter create --project-name punchline --org com.example punchline_app
           cp lib/main.dart punchline_app/lib/main.dart
           cd punchline_app
           flutter pub add shared_preferences
 
-          # Fix compileSdk / minSdk / targetSdk to avoid version mismatches
-          sed -i 's/compileSdk flutter.compileSdkVersion/compileSdk 34/' android/app/build.gradle
-          sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 21/' android/app/build.gradle
-          sed -i 's/targetSdkVersion flutter.targetSdkVersion/targetSdkVersion 34/' android/app/build.gradle
-
-          # Ensure namespace is set (Android Gradle Plugin 7.3+ requirement)
-          if ! grep -q "namespace" android/app/build.gradle; then
-            sed -i "s/android {/android {\n    namespace 'com.example.punchline'/" android/app/build.gradle
-          fi
+      - name: Flutter Doctor (diagnostics)
+        run: flutter doctor -v
 
       - name: Build Release APK
         run: |
           cd punchline_app
-          flutter build apk --release --verbose
+          flutter build apk --release
 
       - name: Upload APK
         if: success()
@@ -60,4 +57,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: build-logs
-          path: punchline_app/build/
+          path: |
+            punchline_app/android/app/build.gradle
+            punchline_app/build/app/outputs/logs/
